@@ -32,6 +32,8 @@ const upload = multer({
 const now = () => Date.now();
 const hashPassword = (password, salt) => crypto.scryptSync(password, salt, 64).toString('hex');
 const publicUser = (u) => u && { id: u.id, username: u.username, displayName: u.display_name, color: u.color };
+const selfUser = (u) =>
+  u && { ...publicUser(u), contactPrivacy: u.contact_privacy, storyPrivacy: u.story_privacy };
 const emitTo = (userId, event, payload) => io.to(`user:${userId}`).emit(event, payload);
 
 function createSession(userId) {
@@ -61,6 +63,37 @@ function areFriends(a, b) {
        ((requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?))`
     )
     .get(a, b, b, a);
+}
+
+function isBlocked(a, b) {
+  return !!db
+    .prepare('SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)')
+    .get(a, b, b, a);
+}
+
+function hasContacted(from, to) {
+  return !!(
+    db.prepare('SELECT 1 FROM messages WHERE sender_id = ? AND recipient_id = ? LIMIT 1').get(from, to) ||
+    db.prepare('SELECT 1 FROM snaps WHERE sender_id = ? AND recipient_id = ? LIMIT 1').get(from, to)
+  );
+}
+
+// Peut-on envoyer un snap / un chat à cet utilisateur ?
+function canContact(senderId, recipientId) {
+  if (senderId === recipientId || isBlocked(senderId, recipientId)) return false;
+  if (areFriends(senderId, recipientId)) return true;
+  const recipient = db.prepare('SELECT contact_privacy FROM users WHERE id = ?').get(recipientId);
+  if (!recipient) return false;
+  return recipient.contact_privacy === 'everyone' || hasContacted(recipientId, senderId);
+}
+
+const canChat = (a, b) => canContact(a, b) || canContact(b, a);
+
+function checkPassword(user, password) {
+  return crypto.timingSafeEqual(
+    Buffer.from(hashPassword(String(password || ''), user.salt), 'hex'),
+    Buffer.from(user.pass_hash, 'hex')
+  );
 }
 
 function friendIds(userId) {
@@ -107,17 +140,14 @@ app.post('/api/register', authRateLimit, (req, res) => {
     .prepare('INSERT INTO users (username, display_name, pass_hash, salt, color, created_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(username, displayName.slice(0, 30), hashPassword(password, salt), salt, color, now());
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(lastInsertRowid);
-  res.json({ token: createSession(user.id), user: publicUser(user) });
+  res.json({ token: createSession(user.id), user: selfUser(user) });
 });
 
 app.post('/api/login', authRateLimit, (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase();
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-  const ok =
-    user &&
-    crypto.timingSafeEqual(Buffer.from(hashPassword(String(req.body.password || ''), user.salt), 'hex'), Buffer.from(user.pass_hash, 'hex'));
-  if (!ok) return res.status(401).json({ error: 'Identifiants incorrects' });
-  res.json({ token: createSession(user.id), user: publicUser(user) });
+  if (!user || !checkPassword(user, req.body.password)) return res.status(401).json({ error: 'Identifiants incorrects' });
+  res.json({ token: createSession(user.id), user: selfUser(user) });
 });
 
 app.post('/api/logout', auth, (req, res) => {
@@ -125,20 +155,106 @@ app.post('/api/logout', auth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/me', auth, (req, res) => res.json({ user: publicUser(req.user) }));
+app.get('/api/me', auth, (req, res) => res.json({ user: selfUser(req.user) }));
+
+/* ---------- Paramètres ---------- */
+
+const PRIVACY = new Set(['friends', 'everyone']);
+
+app.patch('/api/me', auth, (req, res) => {
+  const u = req.user;
+  const b = req.body || {};
+  const displayName = b.displayName === undefined ? u.display_name : String(b.displayName).trim().slice(0, 30);
+  if (!displayName) return res.status(400).json({ error: 'Le nom affiché ne peut pas être vide' });
+  const color = b.color === undefined ? u.color : String(b.color);
+  if (!COLORS.includes(color)) return res.status(400).json({ error: 'Couleur invalide' });
+  const contact = b.contactPrivacy === undefined ? u.contact_privacy : String(b.contactPrivacy);
+  const story = b.storyPrivacy === undefined ? u.story_privacy : String(b.storyPrivacy);
+  if (!PRIVACY.has(contact) || !PRIVACY.has(story)) return res.status(400).json({ error: 'Réglage de confidentialité invalide' });
+  db.prepare('UPDATE users SET display_name = ?, color = ?, contact_privacy = ?, story_privacy = ? WHERE id = ?').run(
+    displayName, color, contact, story, u.id
+  );
+  friendIds(u.id).forEach((fid) => emitTo(fid, 'friends:changed', {}));
+  res.json({ user: selfUser(db.prepare('SELECT * FROM users WHERE id = ?').get(u.id)) });
+});
+
+app.post('/api/me/password', auth, authRateLimit, (req, res) => {
+  const next = String(req.body.newPassword || '');
+  if (!checkPassword(req.user, req.body.currentPassword)) return res.status(403).json({ error: 'Mot de passe actuel incorrect' });
+  if (next.length < 6) return res.status(400).json({ error: 'Nouveau mot de passe : 6 caractères minimum' });
+  const salt = crypto.randomBytes(16).toString('hex');
+  db.prepare('UPDATE users SET pass_hash = ?, salt = ? WHERE id = ?').run(hashPassword(next, salt), salt, req.user.id);
+  db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(req.user.id, req.token);
+  res.json({ ok: true });
+});
+
+app.delete('/api/me', auth, authRateLimit, (req, res) => {
+  const me = req.user.id;
+  if (!checkPassword(req.user, req.body?.password)) return res.status(403).json({ error: 'Mot de passe incorrect' });
+  const contacts = new Set([
+    ...friendIds(me),
+    ...db.prepare('SELECT DISTINCT recipient_id AS id FROM messages WHERE sender_id = ?').all(me).map((r) => r.id),
+    ...db.prepare('SELECT DISTINCT sender_id AS id FROM messages WHERE recipient_id = ?').all(me).map((r) => r.id),
+    ...db.prepare('SELECT DISTINCT recipient_id AS id FROM snaps WHERE sender_id = ?').all(me).map((r) => r.id),
+    ...db.prepare('SELECT DISTINCT sender_id AS id FROM snaps WHERE recipient_id = ?').all(me).map((r) => r.id),
+    ...db.prepare('SELECT requester_id AS id FROM friendships WHERE addressee_id = ?').all(me).map((r) => r.id),
+    ...db.prepare('SELECT addressee_id AS id FROM friendships WHERE requester_id = ?').all(me).map((r) => r.id),
+  ]);
+  for (const s of db.prepare('SELECT media_file, overlay_file FROM snaps WHERE sender_id = ? OR recipient_id = ?').all(me, me)) {
+    removeMediaFile(s.media_file);
+    removeMediaFile(s.overlay_file);
+  }
+  for (const s of db.prepare('SELECT media_file, overlay_file FROM stories WHERE user_id = ?').all(me)) {
+    removeMediaFile(s.media_file);
+    removeMediaFile(s.overlay_file);
+  }
+  db.prepare('DELETE FROM users WHERE id = ?').run(me);
+  contacts.forEach((id) => emitTo(id, 'friends:changed', {}));
+  io.in(`user:${me}`).disconnectSockets(true);
+  res.json({ ok: true });
+});
+
+/* ---------- Blocage ---------- */
+
+app.get('/api/blocks', auth, (req, res) => {
+  const users = db
+    .prepare('SELECT u.* FROM blocks b JOIN users u ON u.id = b.blocked_id WHERE b.blocker_id = ? ORDER BY b.created_at DESC')
+    .all(req.user.id)
+    .map(publicUser);
+  res.json({ users });
+});
+
+app.post('/api/blocks', auth, (req, res) => {
+  const me = req.user.id;
+  const other = Number(req.body.userId);
+  if (!other || other === me || !db.prepare('SELECT 1 FROM users WHERE id = ?').get(other))
+    return res.status(404).json({ error: 'Utilisateur introuvable' });
+  db.prepare('INSERT OR IGNORE INTO blocks (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)').run(me, other, now());
+  db.prepare('DELETE FROM friendships WHERE (requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?)').run(
+    me, other, other, me
+  );
+  for (const s of db.prepare(
+    'SELECT media_file, overlay_file FROM snaps WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)'
+  ).all(me, other, other, me)) {
+    removeMediaFile(s.media_file);
+    removeMediaFile(s.overlay_file);
+  }
+  db.prepare('DELETE FROM snaps WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)').run(me, other, other, me);
+  db.prepare('DELETE FROM messages WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)').run(me, other, other, me);
+  emitTo(other, 'friends:changed', {});
+  res.json({ ok: true });
+});
+
+app.delete('/api/blocks/:id', auth, (req, res) => {
+  db.prepare('DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ?').run(req.user.id, Number(req.params.id));
+  res.json({ ok: true });
+});
 
 /* ---------- Amis ---------- */
 
 app.get('/api/friends', auth, (req, res) => {
   const me = req.user.id;
-  const friends = db
-    .prepare(
-      `SELECT u.* FROM users u WHERE u.id IN (
-         SELECT CASE WHEN requester_id = ? THEN addressee_id ELSE requester_id END
-         FROM friendships WHERE status = 'accepted' AND (requester_id = ? OR addressee_id = ?))`
-    )
-    .all(me, me, me)
-    .map((u) => {
+  const summarize = (u) => {
       const unreadSnaps = db
         .prepare('SELECT id, media_type, created_at FROM snaps WHERE sender_id = ? AND recipient_id = ? AND opened_at IS NULL ORDER BY created_at')
         .all(u.id, me);
@@ -175,8 +291,33 @@ app.get('/api/friends', auth, (req, res) => {
         },
         lastMessage: lastMsg && { mine: lastMsg.sender_id === me, createdAt: lastMsg.created_at, readAt: lastMsg.read_at },
         lastActivity,
+        canSnap: canContact(me, u.id),
       };
-    })
+    };
+  const friends = db
+    .prepare(
+      `SELECT u.* FROM users u WHERE u.id IN (
+         SELECT CASE WHEN requester_id = ? THEN addressee_id ELSE requester_id END
+         FROM friendships WHERE status = 'accepted' AND (requester_id = ? OR addressee_id = ?))`
+    )
+    .all(me, me, me)
+    .map(summarize)
+    .sort((a, b) => b.lastActivity - a.lastActivity);
+  const friendSet = new Set(friends.map((f) => f.id));
+  const contactIds = new Set(
+    db
+      .prepare(
+        `SELECT recipient_id AS id FROM messages WHERE sender_id = ? UNION SELECT sender_id FROM messages WHERE recipient_id = ?
+         UNION SELECT recipient_id FROM snaps WHERE sender_id = ? UNION SELECT sender_id FROM snaps WHERE recipient_id = ?`
+      )
+      .all(me, me, me, me)
+      .map((r) => r.id)
+  );
+  const conversations = [...contactIds]
+    .filter((id) => !friendSet.has(id) && !isBlocked(me, id))
+    .map((id) => db.prepare('SELECT * FROM users WHERE id = ?').get(id))
+    .filter(Boolean)
+    .map(summarize)
     .sort((a, b) => b.lastActivity - a.lastActivity);
 
   const incoming = db
@@ -187,16 +328,20 @@ app.get('/api/friends', auth, (req, res) => {
     .prepare(`SELECT u.* FROM friendships f JOIN users u ON u.id = f.addressee_id WHERE f.requester_id = ? AND f.status = 'pending'`)
     .all(me)
     .map(publicUser);
-  res.json({ friends, incoming, outgoing });
+  res.json({ friends, conversations, incoming, outgoing });
 });
 
 app.get('/api/users/search', auth, (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   if (q.length < 2) return res.json({ users: [] });
   const users = db
-    .prepare('SELECT * FROM users WHERE id != ? AND (username LIKE ? OR display_name LIKE ?) LIMIT 20')
-    .all(req.user.id, `%${q}%`, `%${q}%`)
-    .map(publicUser);
+    .prepare(
+      `SELECT * FROM users WHERE id != ? AND (username LIKE ? OR display_name LIKE ?)
+       AND id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id = ?)
+       AND id NOT IN (SELECT blocker_id FROM blocks WHERE blocked_id = ?) LIMIT 20`
+    )
+    .all(req.user.id, `%${q}%`, `%${q}%`, req.user.id, req.user.id)
+    .map((u) => ({ ...publicUser(u), canSnap: canContact(req.user.id, u.id) }));
   res.json({ users });
 });
 
@@ -204,6 +349,7 @@ app.post('/api/friends/request', auth, (req, res) => {
   const me = req.user.id;
   const target = db.prepare('SELECT * FROM users WHERE username = ?').get(String(req.body.username || '').trim().toLowerCase());
   if (!target) return res.status(404).json({ error: 'Utilisateur introuvable' });
+  if (isBlocked(me, target.id)) return res.status(404).json({ error: 'Utilisateur introuvable' });
   if (target.id === me) return res.status(400).json({ error: 'Vous ne pouvez pas vous ajouter vous-même' });
   const reverse = db.prepare('SELECT * FROM friendships WHERE requester_id = ? AND addressee_id = ?').get(target.id, me);
   if (reverse) {
@@ -282,7 +428,7 @@ app.post(
     const me = req.user.id;
     let recipients = [];
     try {
-      recipients = JSON.parse(req.body.recipients || '[]').map(Number).filter((id) => areFriends(me, id));
+      recipients = [...new Set(JSON.parse(req.body.recipients || '[]').map(Number))].filter((id) => canContact(me, id));
     } catch {}
     const toStory = req.body.story === 'true';
     if (!recipients.length && !toStory) {
@@ -348,6 +494,16 @@ app.post('/api/snaps/:id/open', auth, (req, res) => {
 app.get('/api/stories', auth, (req, res) => {
   const me = req.user.id;
   const ids = [me, ...friendIds(me)];
+  const publicIds = db
+    .prepare(
+      `SELECT DISTINCT s.user_id AS id FROM stories s JOIN users u ON u.id = s.user_id
+       WHERE s.expires_at > ? AND u.story_privacy = 'everyone'`
+    )
+    .all(now())
+    .map((r) => r.id)
+    .filter((id) => !ids.includes(id) && !isBlocked(me, id));
+  const publicSet = new Set(publicIds);
+  ids.push(...publicIds);
   const rows = db
     .prepare(
       `SELECT s.id, s.user_id, s.media_type, s.created_at, s.expires_at,
@@ -361,7 +517,7 @@ app.get('/api/stories', auth, (req, res) => {
   for (const r of rows) {
     if (!byUser.has(r.user_id)) {
       const u = db.prepare('SELECT * FROM users WHERE id = ?').get(r.user_id);
-      byUser.set(r.user_id, { user: publicUser(u), mine: r.user_id === me, stories: [] });
+      byUser.set(r.user_id, { user: publicUser(u), mine: r.user_id === me, discover: publicSet.has(r.user_id), stories: [] });
     }
     byUser.get(r.user_id).stories.push({
       id: r.id,
@@ -373,14 +529,23 @@ app.get('/api/stories', auth, (req, res) => {
     });
   }
   const groups = [...byUser.values()].map((g) => ({ ...g, allSeen: g.stories.every((s) => s.seen) }));
-  groups.sort((a, b) => (a.mine ? -1 : b.mine ? 1 : a.allSeen - b.allSeen || b.stories.at(-1).createdAt - a.stories.at(-1).createdAt));
+  groups.sort(
+    (a, b) =>
+      (a.mine ? -1 : b.mine ? 1 : 0) ||
+      a.discover - b.discover ||
+      a.allSeen - b.allSeen ||
+      b.stories.at(-1).createdAt - a.stories.at(-1).createdAt
+  );
   res.json({ groups });
 });
 
 app.get('/api/stories/:id', auth, (req, res) => {
   const me = req.user.id;
   const s = db.prepare('SELECT * FROM stories WHERE id = ? AND expires_at > ?').get(Number(req.params.id), now());
-  if (!s || (s.user_id !== me && !areFriends(me, s.user_id))) return res.status(404).json({ error: 'Story introuvable' });
+  const owner = s && db.prepare('SELECT story_privacy FROM users WHERE id = ?').get(s.user_id);
+  const allowed =
+    s && (s.user_id === me || (!isBlocked(me, s.user_id) && (areFriends(me, s.user_id) || owner?.story_privacy === 'everyone')));
+  if (!allowed) return res.status(404).json({ error: 'Story introuvable' });
   if (s.user_id !== me) {
     db.prepare('INSERT OR IGNORE INTO story_views (story_id, viewer_id, viewed_at) VALUES (?, ?, ?)').run(s.id, me, now());
   }
@@ -427,7 +592,7 @@ const publicMessage = (m) => ({
 app.get('/api/messages/:friendId', auth, (req, res) => {
   const me = req.user.id;
   const other = Number(req.params.friendId);
-  if (!areFriends(me, other)) return res.status(403).json({ error: "Vous n'êtes pas amis" });
+  if (!canChat(me, other)) return res.status(403).json({ error: 'Conversation indisponible' });
   const unread = db.prepare('SELECT id FROM messages WHERE sender_id = ? AND recipient_id = ? AND read_at IS NULL').all(other, me);
   if (unread.length) {
     const t = now();
@@ -449,7 +614,7 @@ app.post('/api/messages/:friendId', auth, (req, res) => {
   const other = Number(req.params.friendId);
   const body = String(req.body.body || '').trim().slice(0, 2000);
   if (!body) return res.status(400).json({ error: 'Message vide' });
-  if (!areFriends(me, other)) return res.status(403).json({ error: "Vous n'êtes pas amis" });
+  if (!canContact(me, other)) return res.status(403).json({ error: "Cette personne n'accepte que les messages de ses amis" });
   const { lastInsertRowid } = db
     .prepare('INSERT INTO messages (sender_id, recipient_id, body, created_at) VALUES (?, ?, ?, ?)')
     .run(me, other, body, now());
@@ -516,7 +681,7 @@ io.on('connection', (socket) => {
   socket.join(`user:${user.id}`);
   online.set(user.id, (online.get(user.id) || 0) + 1);
   socket.on('typing', ({ to, typing }) => {
-    if (areFriends(user.id, Number(to))) emitTo(Number(to), 'typing', { from: user.id, typing: !!typing });
+    if (canChat(user.id, Number(to))) emitTo(Number(to), 'typing', { from: user.id, typing: !!typing });
   });
   socket.on('disconnect', () => {
     const n = (online.get(user.id) || 1) - 1;

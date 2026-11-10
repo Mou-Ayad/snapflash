@@ -71,9 +71,21 @@ CREATE TABLE IF NOT EXISTS messages (
   read_at INTEGER,
   saved INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS blocks (
+  blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (blocker_id, blocked_id)
+);
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(sender_id, recipient_id);
 CREATE INDEX IF NOT EXISTS idx_snaps_recipient ON snaps(recipient_id);
 `);
+
+const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
+if (!userColumns.has('contact_privacy'))
+  db.exec("ALTER TABLE users ADD COLUMN contact_privacy TEXT NOT NULL DEFAULT 'friends'");
+if (!userColumns.has('story_privacy'))
+  db.exec("ALTER TABLE users ADD COLUMN story_privacy TEXT NOT NULL DEFAULT 'friends'");
 
 export function removeMediaFile(name) {
   if (!name) return;

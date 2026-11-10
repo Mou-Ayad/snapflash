@@ -48,20 +48,20 @@ export default function ChatList({ user, data, pendingRequests, onOpen, onChat, 
         <button className="icon-btn dark" onClick={onProfile} aria-label="Ajouter des amis">👤+</button>
       </header>
       <div className="list">
-        {!data.friends.length && (
+        {!data.friends.length && !data.conversations?.length && (
           <div className="empty">
             <p>Aucun ami pour l'instant.</p>
             <button className="btn primary" onClick={onProfile}>Ajouter des amis</button>
           </div>
         )}
-        {data.friends.map((f) => {
+        {[...data.friends, ...(data.conversations || [])].sort((a, b) => b.lastActivity - a.lastActivity).map((f) => {
           const s = status(f);
           return (
             <div key={f.id} className="row">
               <button className="row-tap" onClick={() => onOpen(f)}>
                 <Avatar user={f} />
                 <div className="row-main">
-                  <strong>{f.displayName}</strong>
+                  <strong>{f.displayName}{data.conversations?.includes(f) && <span className="tag">Pas ami</span>}</strong>
                   <span className={`status ${s.bold ? 'bold' : ''} ${s.color || ''}`}>
                     <i className={`status-icon ${s.icon}`}>{ICONS[s.icon]}</i> {s.text}
                   </span>

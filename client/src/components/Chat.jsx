@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import Avatar from './Avatar';
 import { api } from '../api';
 
-export default function Chat({ user, friend, socket, onBack, onSnap }) {
+export default function Chat({ user, friend, socket, onBack, onSnap, onBlock }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
   const [typing, setTyping] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState('');
   const listRef = useRef(null);
   const typingTimer = useRef(null);
   const pressTimer = useRef(null);
@@ -59,6 +60,7 @@ export default function Chat({ user, friend, socket, onBack, onSnap }) {
 
   const onChange = (e) => {
     setText(e.target.value);
+    setError('');
     emitTyping(true);
     clearTimeout(typingTimer.current);
     typingTimer.current = setTimeout(() => emitTyping(false), 1500);
@@ -70,8 +72,13 @@ export default function Chat({ user, friend, socket, onBack, onSnap }) {
     if (!body) return;
     setText('');
     emitTyping(false);
-    const d = await api(`/messages/${friend.id}`, { method: 'POST', body: { body } }).catch(() => null);
-    if (d) setMessages((prev) => [...prev, d.message]);
+    try {
+      const d = await api(`/messages/${friend.id}`, { method: 'POST', body: { body } });
+      setMessages((prev) => [...prev, d.message]);
+    } catch (err) {
+      setText(body);
+      setError(err.message);
+    }
   };
 
   const toggleSave = async (m) => {
@@ -100,6 +107,7 @@ export default function Chat({ user, friend, socket, onBack, onSnap }) {
             <span className="muted small">{typing ? 'écrit…' : `@${friend.username}`}</span>
           </div>
         </div>
+        <button className="icon-btn dark small" onClick={onBlock} aria-label={`Bloquer ${friend.displayName}`}>🚫</button>
         <button className="icon-btn dark" onClick={onSnap} aria-label="Envoyer un snap">📷</button>
       </header>
       <div className="messages" ref={listRef}>
@@ -134,6 +142,7 @@ export default function Chat({ user, friend, socket, onBack, onSnap }) {
           </div>
         )}
       </div>
+      {error && <div className="error floating">{error}</div>}
       <form className="composer" onSubmit={send}>
         <button type="button" className="icon-btn dark" onClick={onSnap} aria-label="Snap">📷</button>
         <input value={text} onChange={onChange} placeholder="Envoyer un chat" maxLength={2000} />

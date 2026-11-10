@@ -8,7 +8,15 @@ export default function Stories({ user, groups, onOpen, onAdd, onProfile, onRefr
   }, []);
   const mine = groups.find((g) => g.mine);
   const myIndex = groups.indexOf(mine);
-  const others = groups.map((g, i) => ({ g, i })).filter(({ g }) => !g.mine);
+  const others = groups.map((g, i) => ({ g, i })).filter(({ g }) => !g.mine && !g.discover);
+  const discover = groups.map((g, i) => ({ g, i })).filter(({ g }) => g.discover);
+  const card = ({ g, i }) => (
+    <button key={g.user.id} className={`story-card ${g.allSeen ? 'seen' : ''}`} onClick={() => onOpen(i)}>
+      <Avatar user={g.user} size={64} ring={g.allSeen ? 'seen' : 'new'} />
+      <strong>{g.user.displayName}</strong>
+      <span className="muted small">{timeAgo(g.stories.at(-1).createdAt)}</span>
+    </button>
+  );
 
   return (
     <div className="screen panel">
@@ -37,15 +45,13 @@ export default function Stories({ user, groups, onOpen, onAdd, onProfile, onRefr
         </div>
         <h3 className="section-title">Amis</h3>
         {!others.length && <p className="empty">Aucune story récente de vos amis.</p>}
-        <div className="story-grid">
-          {others.map(({ g, i }) => (
-            <button key={g.user.id} className={`story-card ${g.allSeen ? 'seen' : ''}`} onClick={() => onOpen(i)}>
-              <Avatar user={g.user} size={64} ring={g.allSeen ? 'seen' : 'new'} />
-              <strong>{g.user.displayName}</strong>
-              <span className="muted small">{timeAgo(g.stories.at(-1).createdAt)}</span>
-            </button>
-          ))}
-        </div>
+        <div className="story-grid">{others.map(card)}</div>
+        {discover.length > 0 && (
+          <>
+            <h3 className="section-title">Découvrir</h3>
+            <div className="story-grid">{discover.map(card)}</div>
+          </>
+        )}
       </div>
     </div>
   );

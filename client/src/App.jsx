@@ -11,12 +11,13 @@ import SnapViewer from './components/SnapViewer';
 import Stories from './components/Stories';
 import StoryViewer from './components/StoryViewer';
 import Friends from './components/Friends';
+import Settings from './components/Settings';
 
 export default function App() {
   const [user, setUser] = useState(null);
   const [booting, setBooting] = useState(!!getToken());
   const [tab, setTab] = useState('camera');
-  const [friendsData, setFriendsData] = useState({ friends: [], incoming: [], outgoing: [] });
+  const [friendsData, setFriendsData] = useState({ friends: [], conversations: [], incoming: [], outgoing: [] });
   const [storyGroups, setStoryGroups] = useState([]);
   const [capture, setCapture] = useState(null);
   const [draft, setDraft] = useState(null);
@@ -25,6 +26,7 @@ export default function App() {
   const [chatWith, setChatWith] = useState(null);
   const [storyView, setStoryView] = useState(null);
   const [showFriends, setShowFriends] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [toast, setToast] = useState(null);
   const [socket, setSocket] = useState(null);
   const toastTimer = useRef(null);
@@ -43,6 +45,16 @@ export default function App() {
     setToken(null);
     setUser(null);
     setShowFriends(false);
+    setShowSettings(false);
+    setTab('camera');
+  }, []);
+
+  const resetSession = useCallback(() => {
+    setToken(null);
+    setUser(null);
+    setShowFriends(false);
+    setShowSettings(false);
+    setChatWith(null);
     setTab('camera');
   }, []);
 
@@ -87,7 +99,7 @@ export default function App() {
       s.disconnect();
       setSocket(null);
     };
-  }, [user, refreshFriends, refreshStories, notify]);
+  }, [user?.id, refreshFriends, refreshStories, notify]);
 
   if (booting) return <div className="app splash"><img src="/icon.svg" alt="" width="96" /></div>;
   if (!user) return <Auth onAuth={(token, u) => { setToken(token); setUser(u); }} />;
@@ -117,9 +129,18 @@ export default function App() {
   };
 
   const pendingRequests = friendsData.incoming.length;
-  const unreadTotal = friendsData.friends.reduce((n, f) => n + f.unreadSnaps.length + (f.unreadMessages ? 1 : 0), 0);
-  const unseenStories = storyGroups.filter((g) => !g.mine && !g.allSeen).length;
-  const overlayOpen = capture || draft || viewing || chatWith || storyView || showFriends;
+  const blockUser = async (u) => {
+    if (!confirm(`Bloquer ${u.displayName} ? Vous ne serez plus amis et il ne pourra plus vous contacter ni vous trouver.`)) return;
+    await api('/blocks', { method: 'POST', body: { userId: u.id } }).catch(() => {});
+    notify(`${u.displayName} est bloqué`);
+    setChatWith(null);
+    refreshFriends();
+    refreshStories();
+  };
+
+  const unreadTotal = [...friendsData.friends, ...(friendsData.conversations || [])].reduce((n, f) => n + f.unreadSnaps.length + (f.unreadMessages ? 1 : 0), 0);
+  const unseenStories = storyGroups.filter((g) => !g.mine && !g.discover && !g.allSeen).length;
+  const overlayOpen = capture || draft || viewing || chatWith || storyView || showFriends || showSettings;
 
   return (
     <div className="app">
@@ -184,7 +205,9 @@ export default function App() {
       )}
       {draft && (
         <SendTo
+          user={user}
           friends={friendsData.friends}
+          conversations={friendsData.conversations}
           preselect={preselect}
           onBack={() => setDraft(null)}
           onSend={sendDraft}
@@ -214,6 +237,7 @@ export default function App() {
             setChatWith(null);
             setTab('camera');
           }}
+          onBlock={() => blockUser(chatWith)}
         />
       )}
       {storyView && (
@@ -234,6 +258,23 @@ export default function App() {
           onClose={() => setShowFriends(false)}
           onChanged={refreshFriends}
           onLogout={logout}
+          onSettings={() => setShowSettings(true)}
+          notify={notify}
+        />
+      )}
+      {showSettings && (
+        <Settings
+          user={user}
+          onClose={() => setShowSettings(false)}
+          onUserChange={setUser}
+          onBlocksChanged={() => {
+            refreshFriends();
+            refreshStories();
+          }}
+          onDeleted={() => {
+            resetSession();
+            notify('Votre compte a été supprimé');
+          }}
           notify={notify}
         />
       )}

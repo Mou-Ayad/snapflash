@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import Avatar from './Avatar';
 import { api } from '../api';
 
-export default function Friends({ user, data, onClose, onChanged, onLogout, notify }) {
+export default function Friends({ user, data, onClose, onChanged, onLogout, onSettings, notify }) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState([]);
 
@@ -31,6 +31,13 @@ export default function Friends({ user, data, onClose, onChanged, onLogout, noti
     notify(`Vous êtes maintenant ami avec ${u.displayName} !`);
     onChanged();
   };
+  const block = async (u) => {
+    if (!confirm(`Bloquer ${u.displayName} ? Vous ne serez plus amis et il ne pourra plus vous contacter ni vous trouver.`)) return;
+    await api('/blocks', { method: 'POST', body: { userId: u.id } }).catch(() => {});
+    notify(`${u.displayName} est bloqué`);
+    setResults((prev) => prev.filter((r) => r.id !== u.id));
+    onChanged();
+  };
   const remove = async (u) => {
     if (!confirm(`Retirer ${u.displayName} de vos amis ?`)) return;
     await api(`/friends/${u.id}`, { method: 'DELETE' }).catch(() => {});
@@ -49,7 +56,10 @@ export default function Friends({ user, data, onClose, onChanged, onLogout, noti
           <Avatar user={user} size={84} />
           <h2>{user.displayName}</h2>
           <span className="muted">@{user.username}</span>
-          <button className="btn ghost" onClick={onLogout}>Se déconnecter</button>
+          <div className="profile-actions">
+            <button className="btn ghost" onClick={onSettings}>⚙️ Paramètres</button>
+            <button className="btn ghost" onClick={onLogout}>Se déconnecter</button>
+          </div>
         </div>
 
         <h3 className="section-title">Ajouter des amis</h3>
@@ -113,7 +123,10 @@ export default function Friends({ user, data, onClose, onChanged, onLogout, noti
               <strong>{u.displayName}</strong>
               <span className="muted">@{u.username}</span>
             </div>
-            <button className="btn small ghost" onClick={() => remove(u)}>Retirer</button>
+            <div className="row-actions">
+              <button className="btn small ghost" onClick={() => remove(u)}>Retirer</button>
+              <button className="btn small ghost" onClick={() => block(u)} aria-label={`Bloquer ${u.displayName}`}>🚫</button>
+            </div>
           </div>
         ))}
       </div>
