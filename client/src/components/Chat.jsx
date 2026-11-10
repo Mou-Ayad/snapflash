@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import Avatar from './Avatar';
 import { api } from '../api';
+import { addToOutbox, outboxItems } from '../outbox';
 
-export default function Chat({ user, friend, socket, onBack, onSnap, onBlock }) {
+export default function Chat({ user, friend, socket, outboxVersion, onQueued, onBack, onSnap, onBlock }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
   const [typing, setTyping] = useState(false);
@@ -13,10 +14,26 @@ export default function Chat({ user, friend, socket, onBack, onSnap, onBlock }) 
   const pressTimer = useRef(null);
   const sentTyping = useRef(false);
 
-  useEffect(() => {
-    api(`/messages/${friend.id}`)
-      .then((d) => setMessages(d.messages))
+  const load = () =>
+    Promise.all([
+      api(`/messages/${friend.id}`).then((d) => d.messages).catch(() => null),
+      outboxItems()
+        .then((items) =>
+          items
+            .filter((i) => i.type === 'message' && i.to === friend.id)
+            .map((i) => ({ id: `pending-${i.id}`, senderId: user.id, body: i.body, pending: true }))
+        )
+        .catch(() => []),
+    ])
+      .then(([server, pending]) => setMessages((prev) => [...(server ?? prev.filter((m) => !m.pending)), ...pending]))
       .finally(() => setLoaded(true));
+
+  useEffect(() => {
+    if (outboxVersion) load();
+  }, [outboxVersion]);
+
+  useEffect(() => {
+    load();
     return () => {
       api(`/messages/${friend.id}/leave`, { method: 'POST' }).catch(() => {});
     };
@@ -76,12 +93,19 @@ export default function Chat({ user, friend, socket, onBack, onSnap, onBlock }) 
       const d = await api(`/messages/${friend.id}`, { method: 'POST', body: { body } });
       setMessages((prev) => [...prev, d.message]);
     } catch (err) {
-      setText(body);
-      setError(err.message);
+      if (err.offline) {
+        const id = await addToOutbox({ type: 'message', to: friend.id, body });
+        setMessages((prev) => [...prev, { id: `pending-${id}`, senderId: user.id, body, pending: true }]);
+        onQueued();
+      } else {
+        setText(body);
+        setError(err.message);
+      }
     }
   };
 
   const toggleSave = async (m) => {
+    if (m.pending) return;
     const d = await api(`/messages/item/${m.id}/save`, { method: 'POST' }).catch(() => null);
     if (d) setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, saved: d.saved } : x)));
   };
@@ -119,7 +143,7 @@ export default function Chat({ user, friend, socket, onBack, onSnap, onBlock }) 
           const mine = m.senderId === user.id;
           const showName = i === 0 || messages[i - 1].senderId !== m.senderId;
           return (
-            <div key={m.id} className={`msg ${mine ? 'mine' : 'theirs'} ${m.saved ? 'saved' : ''}`}>
+            <div key={m.id} className={`msg ${mine ? 'mine' : 'theirs'} ${m.saved ? 'saved' : ''} ${m.pending ? 'pending' : ''}`}>
               {showName && <span className="msg-author">{mine ? 'MOI' : friend.displayName.toUpperCase()}</span>}
               <div
                 className="msg-body"
@@ -132,7 +156,7 @@ export default function Chat({ user, friend, socket, onBack, onSnap, onBlock }) 
                 {m.body}
               </div>
               {m.saved && <span className="msg-meta">Enregistré</span>}
-              {mine && m.id === lastMine?.id && <span className="msg-meta">{m.readAt ? 'Lu' : 'Envoyé'}</span>}
+              {mine && m.id === lastMine?.id && <span className="msg-meta">{m.pending ? 'En attente de connexion' : m.readAt ? 'Lu' : 'Envoyé'}</span>}
             </div>
           );
         })}

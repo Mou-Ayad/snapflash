@@ -248,3 +248,11 @@ input { font: inherit; }
 .profile-actions { display: flex; gap: 8px; }
 .row-actions { display: flex; gap: 6px; }
 .tag { font-size: 11px; font-weight: 700; background: #eef3ff; color: var(--blue); border-radius: 999px; padding: 2px 8px; margin-left: 6px; }
+
+/* Hors ligne */
+.app { --banner-h: calc(max(6px, env(safe-area-inset-top)) + 24px); }
+.offline-banner { position: absolute; top: 0; left: 0; right: 0; height: var(--banner-h); z-index: 90; background: #16191c; color: #fff; text-align: center; font-size: 13px; font-weight: 600; line-height: 18px; padding: max(6px, env(safe-area-inset-top)) 12px 6px; }
+.app.offline .screen { top: var(--banner-h); }
+.app.offline .bottom-nav { z-index: 30; }
+.app.offline .toast { top: calc(var(--banner-h) + 8px); }
+.msg.pending .msg-body { opacity: 0.6; }

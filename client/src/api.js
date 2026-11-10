@@ -8,11 +8,18 @@ export async function api(path, { method = 'GET', body, form } = {}) {
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const res = await fetch(`/api${path}`, {
-    method,
-    headers,
-    body: form || (body !== undefined ? JSON.stringify(body) : undefined),
-  });
+  let res;
+  try {
+    res = await fetch(`/api${path}`, {
+      method,
+      headers,
+      body: form || (body !== undefined ? JSON.stringify(body) : undefined),
+    });
+  } catch {
+    const err = new Error('Pas de connexion Internet');
+    err.offline = true;
+    throw err;
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(data.error || `Erreur ${res.status}`);
