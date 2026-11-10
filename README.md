@@ -44,3 +44,9 @@ Variables d'environnement : `PORT` (défaut 3001), `DATA_DIR` (défaut `./data`,
 
 - Comme toute app web, la détection des captures d'écran n'est pas possible.
 - Pas encore de « lenses » à détection de visage (oreilles de chien, etc.), ni de notifications push hors de l'application.
+
+## Déploiement (Docker / Railway)
+
+Le `Dockerfile` construit le frontend et lance le serveur. Les données (SQLite + médias) sont écrites dans `DATA_DIR` (`/data` dans l'image) : montez-y un volume persistant.
+
+Sur Railway : créez un service depuis ce dépôt (le fichier `railway.json` est pris en compte), ajoutez un volume monté sur `/data`, puis générez un domaine public (HTTPS fourni automatiquement).

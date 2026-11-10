@@ -17,7 +17,9 @@ const COLORS = ['#FFFC00', '#FF4D6D', '#4DA3FF', '#7CFF6B', '#C77DFF', '#FF9F1C'
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { maxHttpBufferSize: 1e6 });
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '200kb' }));
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -73,7 +75,24 @@ function friendIds(userId) {
 
 /* ---------- Auth ---------- */
 
-app.post('/api/register', (req, res) => {
+const authAttempts = new Map();
+function authRateLimit(req, res, next) {
+  const key = req.ip;
+  const t = now();
+  const entry = authAttempts.get(key);
+  if (!entry || t - entry.start > 15 * 60_000) {
+    authAttempts.set(key, { start: t, count: 1 });
+    return next();
+  }
+  if (++entry.count > 30) return res.status(429).json({ error: 'Trop de tentatives, réessayez dans quelques minutes' });
+  next();
+}
+setInterval(() => {
+  const t = now();
+  for (const [k, v] of authAttempts) if (t - v.start > 15 * 60_000) authAttempts.delete(k);
+}, 5 * 60_000).unref();
+
+app.post('/api/register', authRateLimit, (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase();
   const displayName = String(req.body.displayName || '').trim() || username;
   const password = String(req.body.password || '');
@@ -91,7 +110,7 @@ app.post('/api/register', (req, res) => {
   res.json({ token: createSession(user.id), user: publicUser(user) });
 });
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', authRateLimit, (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase();
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
   const ok =
