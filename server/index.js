@@ -683,11 +683,31 @@ io.on('connection', (socket) => {
   socket.on('typing', ({ to, typing }) => {
     if (canChat(user.id, Number(to))) emitTo(Number(to), 'typing', { from: user.id, typing: !!typing });
   });
+  const relay = (event) =>
+    socket.on(event, (payload = {}) => {
+      const to = Number(payload.to);
+      if (!to || !canChat(user.id, to)) return;
+      if (event === 'call:invite' && !online.has(to)) return socket.emit('call:unavailable', { from: to });
+      emitTo(to, event, { ...payload, to: undefined, from: publicUser(user) });
+      if (event === 'call:accept' || event === 'call:reject') socket.to(`user:${user.id}`).emit('call:handled', { peer: to });
+    });
+  ['call:invite', 'call:accept', 'call:reject', 'call:end', 'call:signal'].forEach(relay);
   socket.on('disconnect', () => {
     const n = (online.get(user.id) || 1) - 1;
     if (n <= 0) online.delete(user.id);
     else online.set(user.id, n);
   });
+});
+
+app.get('/api/ice', auth, (_req, res) => {
+  const iceServers = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+  if (process.env.TURN_URL)
+    iceServers.push({
+      urls: process.env.TURN_URL.split(',').map((u) => u.trim()),
+      username: process.env.TURN_USERNAME,
+      credential: process.env.TURN_CREDENTIAL,
+    });
+  res.json({ iceServers });
 });
 
 /* ---------- Nettoyage périodique ---------- */

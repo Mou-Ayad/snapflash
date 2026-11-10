@@ -3,7 +3,7 @@ import Avatar from './Avatar';
 import { api } from '../api';
 import { addToOutbox, outboxItems } from '../outbox';
 
-export default function Chat({ user, friend, socket, outboxVersion, onQueued, onBack, onSnap, onBlock }) {
+export default function Chat({ user, friend, socket, outboxVersion, onQueued, onBack, onSnap, onBlock, onCall }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
   const [typing, setTyping] = useState(false);
@@ -131,6 +131,8 @@ export default function Chat({ user, friend, socket, outboxVersion, onQueued, on
             <span className="muted small">{typing ? 'écrit…' : `@${friend.username}`}</span>
           </div>
         </div>
+        <button className="icon-btn dark small" onClick={() => onCall(false)} aria-label="Appel vocal">📞</button>
+        <button className="icon-btn dark small" onClick={() => onCall(true)} aria-label="Appel vidéo">🎥</button>
         <button className="icon-btn dark small" onClick={onBlock} aria-label={`Bloquer ${friend.displayName}`}>🚫</button>
         <button className="icon-btn dark" onClick={onSnap} aria-label="Envoyer un snap">📷</button>
       </header>

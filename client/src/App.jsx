@@ -12,6 +12,7 @@ import Stories from './components/Stories';
 import StoryViewer from './components/StoryViewer';
 import Friends from './components/Friends';
 import Settings from './components/Settings';
+import Call from './components/Call';
 import { addToOutbox, clearOutbox, outboxItems, removeFromOutbox, snapForm, snapItem } from './outbox';
 
 const CACHE_KEYS = { user: 'snapflash_user', friends: 'snapflash_friends', stories: 'snapflash_stories' };
@@ -35,6 +36,9 @@ export default function App() {
   const [pendingCount, setPendingCount] = useState(0);
   const [outboxVersion, setOutboxVersion] = useState(0);
   const flushing = useRef(false);
+  const [call, setCall] = useState(null);
+  const callRef = useRef(null);
+  callRef.current = call;
   const [tab, setTab] = useState('camera');
   const [friendsData, setFriendsData] = useState(() =>
     readCache(CACHE_KEYS.friends, { friends: [], conversations: [], incoming: [], outgoing: [] })
@@ -188,6 +192,10 @@ export default function App() {
       refreshFriends();
       refreshStories();
     });
+    s.on('call:invite', ({ from, video }) => {
+      if (callRef.current) return s.emit('call:reject', { to: from.id, reason: 'busy' });
+      setCall({ peer: from, video: !!video, role: 'callee' });
+    });
     s.on('story:new', ({ from }) => {
       notify(`${from.displayName} a publié une story`);
       refreshStories();
@@ -244,7 +252,7 @@ export default function App() {
 
   const unreadTotal = [...friendsData.friends, ...(friendsData.conversations || [])].reduce((n, f) => n + f.unreadSnaps.length + (f.unreadMessages ? 1 : 0), 0);
   const unseenStories = storyGroups.filter((g) => !g.mine && !g.discover && !g.allSeen).length;
-  const overlayOpen = capture || draft || viewing || chatWith || storyView || showFriends || showSettings;
+  const overlayOpen = capture || draft || viewing || chatWith || storyView || showFriends || showSettings || call;
 
   return (
     <div className={`app ${online ? '' : 'offline'}`}>
@@ -344,6 +352,10 @@ export default function App() {
             setTab('camera');
           }}
           onBlock={() => blockUser(chatWith)}
+          onCall={(video) => {
+            if (!online || !socket?.connected) return notify('Pas de connexion Internet : impossible d\'appeler');
+            setCall({ peer: chatWith, video, role: 'caller' });
+          }}
         />
       )}
       {storyView && (
@@ -382,6 +394,17 @@ export default function App() {
             notify('Votre compte a été supprimé');
           }}
           notify={notify}
+        />
+      )}
+      {call && (
+        <Call
+          key={`${call.peer.id}-${call.role}`}
+          call={call}
+          socket={socket}
+          onEnd={(message) => {
+            setCall(null);
+            if (message) notify(message);
+          }}
         />
       )}
       {!online && (

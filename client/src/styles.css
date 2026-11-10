@@ -256,3 +256,19 @@ input { font: inherit; }
 .app.offline .bottom-nav { z-index: 30; }
 .app.offline .toast { top: calc(var(--banner-h) + 8px); }
 .msg.pending .msg-body { opacity: 0.6; }
+
+/* Appels */
+.call-screen { background: #111418; color: #fff; z-index: 60; }
+.call-remote { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+.call-remote.hidden { opacity: 0; pointer-events: none; }
+.call-center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; z-index: 1; }
+.call-center h2 { margin: 6px 0 0; font-size: 26px; }
+.call-status { color: #c9ccd1; font-size: 15px; }
+.call-top { position: absolute; top: max(16px, env(safe-area-inset-top)); left: 16px; display: flex; flex-direction: column; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7); z-index: 2; }
+.call-local { position: absolute; right: 14px; top: max(16px, env(safe-area-inset-top)); width: 110px; height: 150px; object-fit: cover; border-radius: 14px; border: 2px solid rgba(255, 255, 255, 0.7); transform: scaleX(-1); background: #222; z-index: 2; }
+.call-local.hidden { display: none; }
+.call-controls { position: absolute; bottom: max(36px, env(safe-area-inset-bottom)); left: 0; right: 0; display: flex; justify-content: center; gap: 28px; z-index: 2; }
+.call-btn { width: 64px; height: 64px; border-radius: 50%; background: rgba(255, 255, 255, 0.18); color: #fff; font-size: 26px; display: grid; place-items: center; }
+.call-btn.on { background: #fff; color: #111; }
+.call-btn.accept { background: #22c55e; }
+.call-btn.decline { background: var(--red); }
