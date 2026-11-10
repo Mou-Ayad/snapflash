@@ -60,9 +60,10 @@ export default function Editor({ capture, onCancel, onNext }) {
   useEffect(() => {
     const stage = stageRef.current;
     const ro = new ResizeObserver(() => {
+      const c = canvasRef.current;
+      if (!c) return;
       const r = stage.getBoundingClientRect();
       setU(r.width / 100);
-      const c = canvasRef.current;
       const dpr = window.devicePixelRatio || 1;
       c.width = r.width * dpr;
       c.height = r.height * dpr;
